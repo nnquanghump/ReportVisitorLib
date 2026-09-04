@@ -43,6 +43,15 @@
   .status-block{text-align:right;}
   .status{font-family:var(--font-mono); font-size:0.76rem; color:var(--text-soft);}
   .month-badge{display:inline-flex; align-items:center; gap:6px; font-family:var(--font-mono); font-size:0.8rem; font-weight:600; background:var(--indigo-soft); color:var(--indigo); padding:7px 14px; border-radius:999px; margin-top:8px;}
+  .month-picker{display:flex; flex-wrap:wrap; gap:8px; margin-top:10px;}
+  .month-btn{
+    border:1px solid var(--border); background:var(--surface); color:var(--text-soft);
+    font-family:var(--font-mono); font-size:0.78rem; font-weight:600;
+    padding:8px 13px; border-radius:999px; cursor:pointer; transition:.18s ease;
+  }
+  .month-btn:hover{border-color:#C9CCF8; color:var(--indigo);}
+  .month-btn.active{background:var(--indigo); border-color:var(--indigo); color:#fff;}
+  .month-btn:focus-visible{outline:3px solid rgba(91,95,239,.18); outline-offset:2px;}
 
   /* ---- KPI row ---- */
   .kpi-row{display:grid; grid-template-columns:repeat(auto-fit,minmax(200px,1fr)); gap:14px; margin-bottom:16px;}
@@ -100,7 +109,7 @@
   <header class="top">
     <div>
       <div class="live-badge"><span class="live-dot"></span>Trực tiếp</div>
-      <div class="eyebrow">Trung tâm Thông tin - Thư viện,Trường ĐH Y Dược, ĐH Huế</div>
+      <div class="eyebrow">Trung tâm Thông tin - Thư viện</div>
       <h1>Lượt độc giả vào thư viện</h1>
       <div id="monthBadge"></div>
     </div>
@@ -188,6 +197,115 @@ function monthLabelOf(key){ const [y,m] = key.split('-'); return 'Th' + parseInt
 
 
 
+let dashboardState = {
+  allRows: [],
+  allMonthKeys: [],
+  selectedMonth: null,
+  trendChart: null,
+  sparkCharts: []
+};
+
+function renderMonthPicker(){
+  const recentMonths = dashboardState.allMonthKeys.slice(-3).reverse();
+  const box = document.getElementById('monthBadge');
+  box.innerHTML = '';
+
+  const picker = document.createElement('div');
+  picker.className = 'month-picker';
+  picker.setAttribute('aria-label', 'Chọn tháng báo cáo');
+
+  recentMonths.forEach(monthKey => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'month-btn' + (monthKey === dashboardState.selectedMonth ? ' active' : '');
+    btn.textContent = '📅 ' + monthLabelOf(monthKey);
+    btn.setAttribute('aria-pressed', monthKey === dashboardState.selectedMonth ? 'true' : 'false');
+
+    btn.addEventListener('click', () => {
+      if(monthKey === dashboardState.selectedMonth) return;
+      dashboardState.selectedMonth = monthKey;
+      renderMonthPicker();
+      renderSelectedMonth();
+    });
+
+    picker.appendChild(btn);
+  });
+
+  box.appendChild(picker);
+}
+
+function renderSelectedMonth(){
+  const selectedMonth = dashboardState.selectedMonth;
+  const allRows = dashboardState.allRows;
+  const allMonthKeys = dashboardState.allMonthKeys;
+  const selectedRows = allRows.filter(r => monthKeyOf(r.time) === selectedMonth);
+
+  const totalLuot = selectedRows.length;
+  const uniqueReaders = new Set(selectedRows.map(r => r.ma));
+
+  document.getElementById('kpiRow').innerHTML = `
+    <div class="kpi-card"><div class="lbl">Tổng lượt vào — ${monthLabelOf(selectedMonth)}</div><div class="num indigo">${totalLuot.toLocaleString('vi-VN')}</div></div>
+    <div class="kpi-card"><div class="lbl">Độc giả duy nhất — ${monthLabelOf(selectedMonth)}</div><div class="num teal">${uniqueReaders.size.toLocaleString('vi-VN')}</div></div>
+    <div class="kpi-card"><div class="lbl">Khu vực đang theo dõi</div><div class="num">${REGIONS.length}</div></div>
+  `;
+
+  dashboardState.sparkCharts.forEach(chart => {
+    try{ chart.destroy(); }catch(e){}
+  });
+  dashboardState.sparkCharts = [];
+
+  const last12 = allMonthKeys.slice(-12);
+  const grid = document.getElementById('regionGrid');
+  grid.innerHTML = '';
+
+  REGIONS.forEach((region, i) => {
+    const rows = selectedRows.filter(r => r.region === region.name);
+    const uniq = new Set(rows.map(r => r.ma)).size;
+
+    const card = document.createElement('div');
+    card.className = 'region-card';
+    card.innerHTML = `
+      <div class="region-head"><h3>${region.name}</h3><span class="region-swatch" style="background:${REGION_COLORS[i]}"></span></div>
+      <div class="region-nums">
+        <div><div class="num">${rows.length.toLocaleString('vi-VN')}</div><div class="lbl">Tổng lượt</div></div>
+        <div><div class="num">${uniq.toLocaleString('vi-VN')}</div><div class="lbl">Độc giả</div></div>
+      </div>
+      <div class="spark-box"><canvas id="spark_${i}"></canvas></div>
+    `;
+    grid.appendChild(card);
+
+    const sparkData = last12.slice(-8).map(mk =>
+      allRows.filter(r => r.region === region.name && monthKeyOf(r.time) === mk).length
+    );
+
+    const spark = new Chart(card.querySelector('#spark_' + i), {
+      type: 'line',
+      data: {
+        labels: sparkData.map((_,j)=>j),
+        datasets: [{
+          data: sparkData,
+          borderColor: REGION_COLORS[i],
+          borderWidth: 2,
+          pointRadius: 0,
+          tension: 0.4,
+          fill:false
+        }]
+      },
+      options: {
+        responsive:true,
+        maintainAspectRatio:false,
+        plugins:{legend:{display:false}},
+        scales:{x:{display:false}, y:{display:false}},
+        elements:{line:{borderJoinStyle:'round'}}
+      }
+    });
+    dashboardState.sparkCharts.push(spark);
+  });
+
+  document.getElementById('trendSub').textContent =
+    `Lượt vào theo từng khu vực • Đang xem ${monthLabelOf(selectedMonth)}`;
+}
+
 async function main(){
   const missing = REGIONS.some(r => !r.spreadsheetId || r.spreadsheetId.startsWith('DÁN_'));
   if(missing){ showSetupNeeded('Chưa điền đủ ID 3 file khu vực trong REGIONS.'); return; }
@@ -202,69 +320,64 @@ async function main(){
   }
   if(!allRows.length){ showSetupNeeded('Không đọc được dòng dữ liệu nào từ 3 file.'); return; }
 
-  document.getElementById('statusLine').textContent = 'Cập nhật lúc ' + new Date().toLocaleString('vi-VN');
+  document.getElementById('statusLine').textContent =
+    'Cập nhật lúc ' + new Date().toLocaleString('vi-VN');
 
   const allMonthKeys = Array.from(new Set(allRows.map(r => monthKeyOf(r.time)))).sort();
   const latestMonth = allMonthKeys[allMonthKeys.length - 1];
-  document.getElementById('monthBadge').innerHTML = `<span class="month-badge">📅 ${monthLabelOf(latestMonth)}</span>`;
 
-  const latestRows = allRows.filter(r => monthKeyOf(r.time) === latestMonth);
-  const totalLuot = latestRows.length;
-  const uniqueReaders = new Set(latestRows.map(r => r.ma));
+  dashboardState.allRows = allRows;
+  dashboardState.allMonthKeys = allMonthKeys;
+  dashboardState.selectedMonth = latestMonth;
 
-  document.getElementById('kpiRow').innerHTML = `
-    <div class="kpi-card"><div class="lbl">Tổng lượt vào (toàn hệ thống)</div><div class="num indigo">${totalLuot.toLocaleString('vi-VN')}</div></div>
-    <div class="kpi-card"><div class="lbl">Độc giả duy nhất (đã loại trùng)</div><div class="num teal">${uniqueReaders.size.toLocaleString('vi-VN')}</div></div>
-    <div class="kpi-card"><div class="lbl">Khu vực đang theo dõi</div><div class="num">${REGIONS.length}</div></div>
-  `;
+  renderMonthPicker();
 
   const last12 = allMonthKeys.slice(-12);
   const trendDatasets = REGIONS.map((region, i) => ({
     label: region.name,
-    data: last12.map(mk => allRows.filter(r => r.region === region.name && monthKeyOf(r.time) === mk).length),
-    borderColor: REGION_COLORS[i], backgroundColor: REGION_COLORS[i] + '22',
-    tension: 0.35, fill: true, pointRadius: 3, pointBackgroundColor: REGION_COLORS[i], borderWidth: 2.5
+    data: last12.map(mk =>
+      allRows.filter(r => r.region === region.name && monthKeyOf(r.time) === mk).length
+    ),
+    borderColor: REGION_COLORS[i],
+    backgroundColor: REGION_COLORS[i] + '22',
+    tension: 0.35,
+    fill: true,
+    pointRadius: 3,
+    pointBackgroundColor: REGION_COLORS[i],
+    borderWidth: 2.5
   }));
-  new Chart(document.getElementById('trendChart'), {
+
+  dashboardState.trendChart = new Chart(document.getElementById('trendChart'), {
     type: 'line',
     data: { labels: last12.map(monthLabelOf), datasets: trendDatasets },
     options: {
-      responsive:true, maintainAspectRatio:false,
-      plugins:{ legend:{ position:'top', align:'end', labels:{ font:{family:'Inter', size:12}, usePointStyle:true, boxWidth:8 } } },
+      responsive:true,
+      maintainAspectRatio:false,
+      plugins:{
+        legend:{
+          position:'top',
+          align:'end',
+          labels:{font:{family:'Inter', size:12}, usePointStyle:true, boxWidth:8}
+        }
+      },
       scales:{
-        y:{ beginAtZero:true, grid:{color:'#EEF0F5'}, ticks:{font:{family:'JetBrains Mono', size:10}, color:'#9CA0B0'} },
-        x:{ grid:{display:false}, ticks:{font:{family:'Inter', size:11}, color:'#9CA0B0'} }
+        y:{
+          beginAtZero:true,
+          grid:{color:'#EEF0F5'},
+          ticks:{font:{family:'JetBrains Mono', size:10}, color:'#9CA0B0'}
+        },
+        x:{
+          grid:{display:false},
+          ticks:{font:{family:'Inter', size:11}, color:'#9CA0B0'}
+        }
       }
     }
   });
 
-  const grid = document.getElementById('regionGrid');
-  grid.innerHTML = '';
-  REGIONS.forEach((region, i) => {
-    const rows = latestRows.filter(r => r.region === region.name);
-    const uniq = new Set(rows.map(r => r.ma)).size;
+  renderSelectedMonth();
 
-    const card = document.createElement('div');
-    card.className = 'region-card';
-    card.innerHTML = `
-      <div class="region-head"><h3>${region.name}</h3><span class="region-swatch" style="background:${REGION_COLORS[i]}"></span></div>
-      <div class="region-nums">
-        <div><div class="num">${rows.length}</div><div class="lbl">Tổng lượt</div></div>
-        <div><div class="num">${uniq}</div><div class="lbl">Độc giả</div></div>
-      </div>
-      <div class="spark-box"><canvas id="spark_${i}"></canvas></div>
-    `;
-    grid.appendChild(card);
-
-    const sparkData = last12.slice(-8).map(mk => allRows.filter(r => r.region === region.name && monthKeyOf(r.time) === mk).length);
-    new Chart(card.querySelector('#spark_' + i), {
-      type: 'line',
-      data: { labels: sparkData.map((_,j)=>j), datasets: [{ data: sparkData, borderColor: REGION_COLORS[i], borderWidth: 2, pointRadius: 0, tension: 0.4, fill:false }] },
-      options: { responsive:true, maintainAspectRatio:false, plugins:{legend:{display:false}}, scales:{ x:{display:false}, y:{display:false} }, elements:{line:{borderJoinStyle:'round'}} }
-    });
-  });
-
-  document.getElementById('noteBox').textContent = 'Dashboard chỉ đọc dữ liệu lượt vào từ 3 khu vực, không sử dụng danh mục bạn đọc.';
+  document.getElementById('noteBox').textContent =
+    'Dashboard';
 }
 
 function showSetupNeeded(msg){
